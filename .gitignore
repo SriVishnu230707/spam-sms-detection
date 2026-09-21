@@ -1,0 +1,22 @@
+# Python virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Operating system & IDE artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Streamlit config/cache
+.streamlit/
