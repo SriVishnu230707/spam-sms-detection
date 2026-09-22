@@ -134,6 +134,11 @@ c:\projects\Spam SMS detection\
 ├── src/
 │   ├── __init__.py
 │   └── features.py              # Custom token normalization & extra feature extractor
+├── web/                         # Modern Standalone Web UI (HTML5, Vanilla CSS, JS)
+│   ├── index.html               # Semantic UI with preset chips, threshold slider & gauge
+│   ├── style.css                # Dark mode glassmorphic styling & micro-animations
+│   └── app.js                   # Client logic with debounced live auto-detection
+├── web_app.py                   # Standalone Web Server & REST API (zero extra dependencies)
 ├── app.py                       # Interactive Streamlit application
 ├── run_pipeline.py              # CLI runner script for full Phase 1-10 pipeline
 ├── generate_notebook.py         # Notebook generator
@@ -148,17 +153,49 @@ c:\projects\Spam SMS detection\
 
 ## 10. Running the Project
 
-### Execute the Pipeline
+### Option A: Run the Modern Standalone Web UI (Recommended)
+Zero extra framework installations required (runs on Python's standard library):
 ```bash
-python run_pipeline.py
+python web_app.py
+```
+Then visit **`http://localhost:5000`** in your browser.
+
+#### REST API Endpoint
+You can also send prediction requests directly to the REST API:
+```bash
+curl -X POST http://localhost:5000/api/predict \
+  -H "Content-Type: application/json" \
+  -d '{"text": "WINNER! You won £1,000 cash. Call 09061701461 now!"}'
 ```
 
-### Run the Interactive Web Demo
+Response:
+```json
+{
+  "text": "WINNER! You won £1,000 cash. Call 09061701461 now!",
+  "spam_probability": 0.9941,
+  "spam_percentage": 99.4,
+  "is_spam": true,
+  "verdict": "SPAM",
+  "threshold": 0.7088,
+  "normalized_text": "winner! you won  moneytoken  cash. call  longnumtoken  now!",
+  "extracted_tokens": [
+    { "token": "moneytoken", "label": "Currency Amount (£, $, €)", "type": "money" },
+    { "token": "longnumtoken", "label": "Phone Number / Shortcode (5+ digits)", "type": "number" }
+  ]
+}
+```
+
+### Option B: Run via Streamlit
 ```bash
 streamlit run app.py
 ```
 
-### Standalone Python Inference
+### Option C: Execute the Full Training Pipeline
+```bash
+python run_pipeline.py
+```
+
+### Option D: Standalone Python Inference
 ```python
 import joblib
 from src.features import normalize
@@ -177,3 +214,4 @@ for text, prob in zip(messages, probabilities):
     label = "SPAM" if prob >= threshold else "HAM"
     print(f"[{label}] (p={prob:.4f}) : {text}")
 ```
+
