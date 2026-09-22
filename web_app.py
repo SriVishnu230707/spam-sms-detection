@@ -10,6 +10,7 @@ import json
 import mimetypes
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
+from pathlib import Path
 import joblib
 
 # Ensure project root is in python path
@@ -19,10 +20,12 @@ if ROOT_DIR not in sys.path:
 
 from src.features import normalize
 
-# Global model state
+# Global model state & security limits
 MODEL_BUNDLE = None
 DEFAULT_PORT = 5000
-WEB_DIR = os.path.join(ROOT_DIR, "web")
+DEFAULT_HOST = os.environ.get("HOST", "127.0.0.1")
+MAX_CONTENT_LENGTH = 64 * 1024  # 64 KB maximum payload for SMS messages
+WEB_DIR = (Path(ROOT_DIR) / "web").resolve()
 
 
 def load_model():
@@ -85,6 +88,9 @@ def analyze_message(text: str, custom_threshold: float = None) -> dict:
 
 class SpamDetectionServer(BaseHTTPRequestHandler):
     def end_headers(self):
+        # Security headers to mitigate MIME-sniffing and clickjacking
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
         # Enable CORS for API consumers
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -113,26 +119,31 @@ class SpamDetectionServer(BaseHTTPRequestHandler):
 
         # Serve static web frontend
         if path == "/" or path == "/index.html":
-            file_path = os.path.join(WEB_DIR, "index.html")
+            target_path = (WEB_DIR / "index.html").resolve()
         else:
-            rel_path = path.lstrip("/")
-            file_path = os.path.join(WEB_DIR, rel_path)
+            # Unquote URL and strip leading slash / backslash to prevent traversal
+            rel_path = urllib.parse.unquote(path).lstrip("/\\")
+            target_path = (WEB_DIR / rel_path).resolve()
 
-        # Security check to prevent directory traversal
-        if not os.path.abspath(file_path).startswith(os.path.abspath(WEB_DIR)):
-            self.send_error(403, "Access Denied")
+        # Strict security check to prevent directory traversal
+        try:
+            if not target_path.is_relative_to(WEB_DIR):
+                self.send_error(403, "Access Denied")
+                return
+        except (ValueError, RuntimeError):
+            self.send_error(400, "Bad Request")
             return
 
-        if os.path.exists(file_path) and os.path.isfile(file_path):
-            mime_type, _ = mimetypes.guess_type(file_path)
+        if target_path.is_file():
+            mime_type, _ = mimetypes.guess_type(str(target_path))
             if mime_type is None:
                 mime_type = "application/octet-stream"
 
             self.send_response(200)
             self.send_header("Content-Type", mime_type)
-            self.send_header("Content-Length", str(os.path.getsize(file_path)))
+            self.send_header("Content-Length", str(target_path.stat().st_size))
             self.end_headers()
-            with open(file_path, "rb") as f:
+            with open(target_path, "rb") as f:
                 self.wfile.write(f.read())
         else:
             self.send_error(404, "File Not Found")
@@ -141,9 +152,24 @@ class SpamDetectionServer(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/api/predict":
             try:
-                content_len = int(self.headers.get("Content-Length", 0))
-                post_body = self.rfile.read(content_len).decode("utf-8")
+                raw_len = self.headers.get("Content-Length")
+                if raw_len is None or not raw_len.strip().isdigit():
+                    self.send_error(400, "Invalid or missing Content-Length header")
+                    return
+
+                content_len = int(raw_len)
+                if content_len < 0:
+                    self.send_error(400, "Content-Length must be non-negative")
+                    return
+                if content_len > MAX_CONTENT_LENGTH:
+                    self.send_error(413, f"Payload Too Large (max {MAX_CONTENT_LENGTH} bytes)")
+                    return
+
+                post_body = self.rfile.read(content_len).decode("utf-8", errors="replace")
                 data = json.loads(post_body) if post_body else {}
+                if not isinstance(data, dict):
+                    self.send_error(400, "Malformed request body: JSON object required")
+                    return
 
                 text = data.get("text", "")
                 threshold = data.get("threshold", None)
@@ -152,24 +178,30 @@ class SpamDetectionServer(BaseHTTPRequestHandler):
 
                 result = analyze_message(text, threshold)
 
+                resp_bytes = json.dumps(result, indent=2).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(resp_bytes)))
                 self.end_headers()
-                self.wfile.write(json.dumps(result, indent=2).encode("utf-8"))
+                self.wfile.write(resp_bytes)
+            except json.JSONDecodeError:
+                self.send_error(400, "Invalid JSON in request body")
             except Exception as e:
+                # Log detailed error internally without leaking system info to client
+                sys.stderr.write(f"[Internal Server Error] {e}\n")
                 self.send_response(500)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+                self.wfile.write(json.dumps({"error": "Internal server error occurred."}).encode("utf-8"))
         else:
             self.send_error(404, "Endpoint Not Found")
 
     def log_message(self, format, *args):
-        # Clean logging format
-        sys.stderr.write(f"[{self.log_date_time_string()}] {args[0]} {args[1]} {args[2]}\n")
+        # Clean standard logging format supporting both requests and errors
+        sys.stderr.write(f"[{self.log_date_time_string()}] {format % args}\n")
 
 
-def run(port: int = DEFAULT_PORT):
+def run(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     # Ensure stdout handles UTF-8 on Windows
     if sys.platform.startswith("win"):
         try:
@@ -179,13 +211,13 @@ def run(port: int = DEFAULT_PORT):
             pass
 
     load_model()
-    server_address = ("", port)
+    server_address = (host, port)
     httpd = HTTPServer(server_address, SpamDetectionServer)
     print("=" * 60)
     print(f"[*] SMS Spam Detection Web App is active!")
-    print(f"[*] Local Web UI:   http://localhost:{port}")
-    print(f"[*] API Endpoint:   http://localhost:{port}/api/predict")
-    print(f"[*] Health Check:   http://localhost:{port}/api/health")
+    print(f"[*] Local Web UI:   http://{host}:{port}")
+    print(f"[*] API Endpoint:   http://{host}:{port}/api/predict")
+    print(f"[*] Health Check:   http://{host}:{port}/api/health")
     print("Press Ctrl+C to terminate.")
     print("=" * 60)
     try:
@@ -197,4 +229,6 @@ def run(port: int = DEFAULT_PORT):
 
 if __name__ == "__main__":
     port_arg = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
-    run(port_arg)
+    host_arg = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_HOST
+    run(host=host_arg, port=port_arg)
+

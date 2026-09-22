@@ -144,7 +144,8 @@ c:\projects\Spam SMS detection\
 ├── generate_notebook.py         # Notebook generator
 ├── notebook.ipynb               # Fully structured Jupyter Notebook
 ├── eda_length_boxplot.png       # Generated EDA visualization
-├── test_precision_recall_curve.png # Generated test PR curve
+├── tests/
+│   └── test_security.py         # Automated test suite for traversal, DoS, headers & XSS
 ├── requirements.txt             # Python dependencies
 └── README.md                    # Technical documentation
 ```
@@ -214,4 +215,11 @@ for text, prob in zip(messages, probabilities):
     label = "SPAM" if prob >= threshold else "HAM"
     print(f"[{label}] (p={prob:.4f}) : {text}")
 ```
+
+### Option E: Run Security Integrity Tests
+Automated verification against Directory Traversal, Cross-Site Scripting (XSS), DoS payload overflows, and security response headers:
+```bash
+python tests/test_security.py
+```
+
 

@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import os
 import sys
+import html
 
 # Ensure project root is in python path
 sys.path.insert(0, os.path.abspath("."))
@@ -193,7 +194,8 @@ if input_message.strip():
     with col2:
         st.markdown("### 🔍 Feature Preprocessing Inspection")
         st.markdown("**Normalized Text (Tokenized for Model Input):**")
-        st.markdown(f"<div class='token-box'>{normalized_input}</div>", unsafe_allow_html=True)
+        escaped_normalized = html.escape(normalized_input)
+        st.markdown(f"<div class='token-box'>{escaped_normalized}</div>", unsafe_allow_html=True)
 
         detected_tokens = []
         if "urltoken" in normalized_input:
